@@ -1,1 +1,1 @@
-## Smart Contract Part of the Mev ClawBack Hook project
+## Smart Contract Part of the AVS LVR Auction Hook
