@@ -2,10 +2,10 @@
 pragma solidity ^0.8.0;
 
 import {Test, Vm} from "forge-std/Test.sol";
-import {LPRewardDistributor} from "../src/LPRewardDistributor.sol";
-import {ILPRewardDistributor} from "../src/interfaces/ILPRewardDistributor.sol";
-import {ErrorsLib} from "../src/libraries/ErrorsLib.sol";
-import {EventsLib} from "../src/libraries/EventsLib.sol";
+import {LPRewardDistributor} from "../../src/LPRewardDistributor.sol";
+import {ILPRewardDistributor} from "../../src/interfaces/ILPRewardDistributor.sol";
+import {ErrorsLib} from "../../src/libraries/ErrorsLib.sol";
+import {EventsLib} from "../../src/libraries/EventsLib.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 
 contract LPRewardDistributorTest is Test {
