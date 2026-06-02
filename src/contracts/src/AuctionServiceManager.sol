@@ -17,6 +17,7 @@ import {PoolId} from "v4-core/types/PoolId.sol";
 import {IAuctionServiceManager, AuctionResult} from "./interfaces/IAuctionServiceManager.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {EventsLib} from "./libraries/EventsLib.sol";
+import {ConstantsLib} from "./libraries/ConstantsLib.sol";
 
 /// @title AuctionServiceManager
 /// @author ohMySol
@@ -36,14 +37,6 @@ import {EventsLib} from "./libraries/EventsLib.sol";
 contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
-
-    /* CONSTANTS */
-
-    /// @notice Blocks after `commitWinner` during which the result can be challenged.
-    uint256 public constant CHALLENGE_WINDOW = 50;
-
-    /// @notice EigenLayer operator-set ID this AVS uses for membership checks and slashing.
-    uint32 public constant OPERATOR_SET_ID = 1;
 
     /* IMMUTABLE VARIABLES */
 
@@ -106,7 +99,7 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
         IAllocationManagerTypes.CreateSetParams[] memory params = new IAllocationManagerTypes.CreateSetParams[](1);
         
         params[0] = IAllocationManagerTypes.CreateSetParams({
-            operatorSetId: OPERATOR_SET_ID, 
+            operatorSetId: ConstantsLib.OPERATOR_SET_ID, 
             strategies: strategies
         });
 
@@ -179,7 +172,7 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
 
         if (!result.committed) revert ErrorsLib.AuctionServiceManager_NotCommitted();
         if (result.challenged) revert ErrorsLib.AuctionServiceManager_AlreadyChallenged();
-        if (block.number > result.committedBlock + CHALLENGE_WINDOW) {
+        if (block.number > result.committedBlock + ConstantsLib.CHALLENGE_WINDOW) {
             revert ErrorsLib.AuctionServiceManager_ChallengeWindowClosed();
         }
         if (higherBidAmount <= result.bidAmount) revert ErrorsLib.AuctionServiceManager_NotHigherBid();
@@ -241,7 +234,7 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
 
         IAllocationManagerTypes.SlashingParams memory params = IAllocationManagerTypes.SlashingParams({
             operator: signer,
-            operatorSetId: OPERATOR_SET_ID,
+            operatorSetId: ConstantsLib.OPERATOR_SET_ID,
             strategies: _slashableStrategies,
             wadsToSlash: _slashWads,
             description: "AuctionServiceManager: fraudulent winner commitment"
@@ -260,7 +253,7 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
     {
         OperatorSet memory opSet = OperatorSet({
             avs: address(this), 
-            id: OPERATOR_SET_ID
+            id: ConstantsLib.OPERATOR_SET_ID
         });
         address[] memory seen = new address[](signatures.length);
 
