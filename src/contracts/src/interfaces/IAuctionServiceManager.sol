@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import {PoolId} from "v4-core/types/PoolId.sol";
-import {IStrategy} from "eigenlayer-contracts/src/contracts/interfaces/IStrategy.sol";
 
 /// @notice Committed result of an LVR auction round.
 /// @param bidAmount ETH amount the winner committed to pay the LP reward distributor.
@@ -35,23 +34,11 @@ interface IAuctionServiceManager {
     /// @param rewardsInitiator Address of the rewards initiator.
     function initialize(address initialOwner, address rewardsInitiator) external;
 
-    /// @notice Creates this AVS's operator set in EigenLayer with the given slashable strategies.
-    /// @dev Call once post-deployment. Operators then able to join by calling:
-    /// `AllocationManager.registerForOperatorSets(operator, {avs: this, operatorSetIds: [1], data: ""})`.
-    /// They must also allocate stake to `OPERATOR_SET_ID` for slashing to have economic effect.
-    /// ! Only owner can call this function. 
-    ///
-    /// @param strategies List of strategies (staked assets) that will be slashable in case of a successful challenge.
-    function createOperatorSet(IStrategy[] calldata strategies) external;
-
-    /// @notice Sets the strategies and slash percentages applied to each signer when a challenge succeeds.
-    /// @dev `strategies` must match those in the operator set. Proportions are in wads:
-    /// 1e17 = 10 %, 5e17 = 50 %, 1e18 = 100 %.
-    /// ! Only owner can call this function.
-    ///
-    /// @param strategies List of strategies (staked assets) that will be slashable in case of a successful challenge.
-    /// @param wads List of slash percentages in wads (1e18 = 100 %). Must be the same length as `strategies`.
-    function configureSlashing(IStrategy[] calldata strategies, uint256[] calldata wads) external;
+    /// @dev Note: the EigenLayer operator-set admin functions `createOperatorSet` and
+    /// `configureSlashing` are intentionally NOT part of this interface — they take `IStrategy`,
+    /// whose import pulls EigenLayer's `^0.8.27` pragma, which would conflict with the V4
+    /// (`=0.8.26`) compile unit of consumers like `EigenAuctionHook`. They live as public functions
+    /// on the `AuctionServiceManager` contract directly.
 
     /// @notice Commits the auction winner for a given pool and block.
     /// @dev Validates that at least `threshold` unique registered operators signed

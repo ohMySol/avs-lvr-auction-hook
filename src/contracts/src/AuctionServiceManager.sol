@@ -94,7 +94,12 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
 
     /* EIGENLAYER OPERATOR SET SETUP */
 
-    /// @inheritdoc IAuctionServiceManager
+    /// @notice Creates this AVS's operator set in EigenLayer with the given slashable strategies.
+    /// @dev Owner-only. Call once post-deployment; operators then join via
+    /// `AllocationManager.registerForOperatorSets`. Not part of the hook-facing interface because it
+    /// references `IStrategy`, whose import would otherwise pull EigenLayer's `^0.8.27` pragma into
+    /// the V4 (`=0.8.26`) hook compile unit.
+    /// @param strategies Strategies (staked assets) slashable on a successful challenge.
     function createOperatorSet(IStrategy[] calldata strategies) external onlyOwner {
         IAllocationManagerTypes.CreateSetParams[] memory params = new IAllocationManagerTypes.CreateSetParams[](1);
         
@@ -106,7 +111,12 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
         _allocationManager.createOperatorSets(address(this), params);
     }
 
-    /// @inheritdoc IAuctionServiceManager
+    /// @notice Sets the strategies and slash proportions applied to each signer on a successful
+    /// challenge. Owner-only. `strategies` must match the operator set; proportions are in wads
+    /// (1e17 = 10%, 1e18 = 100%). Kept off the hook-facing interface for the same `IStrategy`
+    /// pragma reason as `createOperatorSet`.
+    /// @param strategies Strategies to slash.
+    /// @param wads Slash proportion per strategy, in wads. Same length as `strategies`.
     function configureSlashing(IStrategy[] calldata strategies, uint256[] calldata wads)
         external
         onlyOwner

@@ -10,4 +10,7 @@ library ConstantsLib {
 
     /// @notice EigenLayer operator-set ID this AVS uses for membership checks and slashing.
     uint32 public constant OPERATOR_SET_ID = 1;
+
+    /// @dev Fixed-point precision for the reward-per-share accumulator.
+    uint256 public constant PRECISION = 1e18;
 }
