@@ -6,13 +6,23 @@ import {PoolId} from "v4-core/types/PoolId.sol";
 
 import {IAuctionServiceManager} from "./IAuctionServiceManager.sol";
 
-/// @notice Per-position reward bookkeeping. Arrays are indexed by currency (0 = currency0).
-/// @param liquidity The position's tracked liquidity.
-/// @param lastGrowthInsideX128 Inside-growth checkpoints per currency at the last settlement.
-/// @param owed Settled but unclaimed reward balances per currency.
+/// @notice Per-position reward bookkeeping. Currency-indexed arrays use 0 = currency0, 1 = currency1.
+/// @dev Liquidity is split into `liquidity` (mature — eligible for rewards) and `freshLiquidity`
+/// (added in `freshBlock`, not yet eligible). Fresh liquidity matures — folding into `liquidity` —
+/// once a later block is reached. This is the JIT guard: liquidity added in a block cannot earn that
+/// block's arbitrage, so the atomic add ==> arb ==> remove attack accrues nothing.
+/// @param liquidity Mature, reward-eligible liquidity.
+/// @param freshLiquidity Liquidity added in `freshBlock`, not yet matured.
+/// @param freshBlock Block in which the current `freshLiquidity` was added.
+/// @param lastGrowthInsideX128 Inside-growth checkpoints (per currency) for `liquidity`.
+/// @param freshGrowthInsideX128 Inside-growth checkpoints (per currency) for `freshLiquidity`.
+/// @param owed Settled-but-unclaimed reward balances (per currency).
 struct Position {
     uint128 liquidity;
+    uint128 freshLiquidity;
+    uint256 freshBlock;
     uint256[2] lastGrowthInsideX128;
+    uint256[2] freshGrowthInsideX128;
     uint256[2] owed;
 }
 
