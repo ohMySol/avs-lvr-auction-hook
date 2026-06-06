@@ -10,5 +10,6 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
-  }
+  },
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }
