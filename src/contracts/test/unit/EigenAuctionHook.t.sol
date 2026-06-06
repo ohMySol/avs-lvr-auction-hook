@@ -10,7 +10,6 @@ import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol
 import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
-import {HookMiner} from "v4-hooks-public/src/utils/HookMiner.sol";
 
 import {EigenAuctionHook} from "../../src/EigenAuctionHook.sol";
 import {MockAuctionServiceManager} from "../mocks/MockAuctionServiceManager.sol";
