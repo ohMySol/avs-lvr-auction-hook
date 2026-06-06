@@ -93,6 +93,14 @@ contract Settler is ISettler, IUnlockCallback {
         ));
     }
 
+    /* MODIFIERS */
+
+    /// @dev Restricts a function to calls from the pool manager (the unlock callback path).
+    modifier onlyPoolManager() {
+        if (msg.sender != address(poolManager)) revert ErrorsLib.Settler_NotPoolManager();
+        _;
+    }
+
     /* SETTLEMENT */
 
     /// @inheritdoc ISettler
@@ -117,19 +125,21 @@ contract Settler is ISettler, IUnlockCallback {
 
     /// @notice Called by the pool manager after `unlock`. Executes all swaps atomically.
     /// @dev Only the pool manager may call this.
-    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
-        if (msg.sender != address(poolManager)) revert ErrorsLib.Settler_NotPoolManager();
-
+    function unlockCallback(bytes calldata data) external override onlyPoolManager returns (bytes memory) {
         (address operator, PoolKey memory key, SwapParams memory arb, SwapIntent[] memory intents) =
             abi.decode(data, (address, PoolKey, SwapParams, SwapIntent[]));
 
-        // Phase 1: arb-flagged swap — hook skims bid and credits LPs.
+        // Step 1: arb-flagged swap — hook skims bid and credits LPs.
         if (arb.amountSpecified != 0) {
             BalanceDelta d = poolManager.swap(key, arb, abi.encode(true));
             _settleDeltas(key, arb.zeroForOne, operator, d);
         }
 
-        // Phase 2: user intent fills at the post-arb price.
+        // Step 2: user intent fills at the post-arb price.
+        // ! Atm this is working in a loop, and each intent executes as a separate swap inside 1 tx.
+        // Yes the order of swaps is not possible to change, but every user got a different price - that's a POC limitation.
+        // Solution: in V2 I will switch to batch settlement via net imbalance. Net imbalance - is the only amount that
+        // touches the AMM, everything else can be matches user-agains-user.
         uint256 n = intents.length;
         for (uint256 i; i < n; ++i) {
             _fill(key, intents[i]);
