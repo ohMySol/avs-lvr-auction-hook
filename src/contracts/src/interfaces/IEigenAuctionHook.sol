@@ -26,6 +26,15 @@ struct Position {
     uint256[2] owed;
 }
 
+/// @notice Per-pool snapshot of in-range liquidity added during the current block — the JIT cohort
+/// that must be excluded from this block's arb reward share. Packs into a single storage slot.
+/// @param blockNumber Block this snapshot belongs to; a stale value means `inRange` is treated as 0.
+/// @param inRange Fresh in-range liquidity added during `blockNumber`.
+struct FreshLiquidity {
+    uint64 blockNumber;
+    uint128 inRange;
+}
+
 /// @title IEigenAuctionHook
 /// @author ohMySol
 /// @notice Interface for `EigenAuctionHook` — a Uniswap V4 hook that implements a locked

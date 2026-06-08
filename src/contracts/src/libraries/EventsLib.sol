@@ -40,6 +40,16 @@ library EventsLib {
     /// @param slashId  Slash ID returned by AllocationManager
     event OperatorSlashed(address indexed operator, uint256 slashId);
 
+    /// @notice Emitted when AllocationManager admits an operator into this AVS's operator set
+    /// @param operator Address of the registered operator
+    /// @param operatorSetId The operator set the operator joined
+    event OperatorRegistered(address indexed operator, uint32 operatorSetId);
+
+    /// @notice Emitted when AllocationManager removes an operator from this AVS's operator set
+    /// @param operator Address of the deregistered operator
+    /// @param operatorSetId The operator set the operator left
+    event OperatorDeregistered(address indexed operator, uint32 operatorSetId);
+
     /* EigenAuctionHook Events  */
 
     /// @notice Emitted when a winning arb swap settles and the bid is folded into LP rewards

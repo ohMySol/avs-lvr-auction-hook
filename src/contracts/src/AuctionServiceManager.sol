@@ -12,6 +12,7 @@ import {OperatorSet} from "eigenlayer-contracts/src/contracts/libraries/Operator
 import {ISlashingRegistryCoordinator} from "eigenlayer-middleware/src/interfaces/ISlashingRegistryCoordinator.sol";
 import {IStakeRegistry} from "eigenlayer-middleware/src/interfaces/IStakeRegistry.sol";
 import {ServiceManagerBase} from "eigenlayer-middleware/src/ServiceManagerBase.sol";
+import {IAVSRegistrar} from "eigenlayer-contracts/src/contracts/interfaces/IAVSRegistrar.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 
 import {IAuctionServiceManager, AuctionResult} from "./interfaces/IAuctionServiceManager.sol";
@@ -34,7 +35,7 @@ import {ConstantsLib} from "./libraries/ConstantsLib.sol";
 /// as invalid and triggers EigenLayer slashing of every operator who signed the fraudulent commitment.
 ///
 /// @dev Deploy as a proxy (`ERC1967Proxy` or `TransparentUpgradeableProxy`). Call `initialize` once.
-contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
+contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager, IAVSRegistrar {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
@@ -130,6 +131,55 @@ contract AuctionServiceManager is ServiceManagerBase, IAuctionServiceManager {
             _slashableStrategies.push(strategies[i]);
             _slashWads.push(wads[i]);
         }
+    }
+
+    /* IAVSRegistrar — operator-set admission */
+
+    // EigenLayer's AllocationManager defaults the AVS registrar to the AVS address itself when none is
+    // set, so this contract IS its own registrar. Without these hooks `registerForOperatorSets` would
+    // revert and no operator could ever join the set, making `commitWinner` permanently unsatisfiable.
+
+    /// @dev Restricts the IAVSRegistrar hooks to calls from EigenLayer's AllocationManager.
+    modifier onlyAllocationManager() {
+        if (msg.sender != address(_allocationManager)) {
+            revert ErrorsLib.AuctionServiceManager_NotAllocationManager();
+        }
+        _;
+    }
+
+    /// @inheritdoc IAVSRegistrar
+    /// @dev Called by AllocationManager when an operator joins. Admission is permissionless — the
+    /// economic gate is the operator's EigenLayer stake/slashing enforced by AllocationManager; we
+    /// only assert the registration targets this AVS and the single operator set this AVS runs.
+    function registerOperator(
+        address operator,
+        address avs,
+        uint32[] calldata operatorSetIds,
+        bytes calldata /* data */
+    ) external onlyAllocationManager {
+        if (avs != address(this)) revert ErrorsLib.AuctionServiceManager_InvalidAvs();
+        for (uint256 i = 0; i < operatorSetIds.length; i++) {
+            if (operatorSetIds[i] != ConstantsLib.OPERATOR_SET_ID) {
+                revert ErrorsLib.AuctionServiceManager_InvalidOperatorSet();
+            }
+        }
+        emit EventsLib.OperatorRegistered(operator, ConstantsLib.OPERATOR_SET_ID);
+    }
+
+    /// @inheritdoc IAVSRegistrar
+    /// @dev Called by AllocationManager when an operator leaves. Membership state lives in
+    /// AllocationManager; we just acknowledge the deregistration.
+    function deregisterOperator(address operator, address avs, uint32[] calldata /* operatorSetIds */)
+        external
+        onlyAllocationManager
+    {
+        if (avs != address(this)) revert ErrorsLib.AuctionServiceManager_InvalidAvs();
+        emit EventsLib.OperatorDeregistered(operator, ConstantsLib.OPERATOR_SET_ID);
+    }
+
+    /// @inheritdoc IAVSRegistrar
+    function supportsAVS(address avs) external view returns (bool) {
+        return avs == address(this);
     }
 
     /* WINNER COMMITMENT */

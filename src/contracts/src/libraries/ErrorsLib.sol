@@ -60,6 +60,15 @@ library ErrorsLib {
     /// @notice Thrown when `configureSlashing` is called with arrays of mismatched length
     error AuctionServiceManager_SlashConfigLengthMismatch();
 
+    /// @notice Thrown when an `IAVSRegistrar` hook is called by an address other than the AllocationManager
+    error AuctionServiceManager_NotAllocationManager();
+
+    /// @notice Thrown when an operator-set registration targets an AVS other than this contract
+    error AuctionServiceManager_InvalidAvs();
+
+    /// @notice Thrown when registering for an operator set id this AVS does not run
+    error AuctionServiceManager_InvalidOperatorSet();
+
     /* Settler Errors */
 
     /// @notice Thrown when `unlockCallback` is called by an address other than the pool manager
