@@ -1,4 +1,4 @@
-import type { Account, Address, Hex } from "viem";
+import { keccak256, encodePacked, type Account, type Address, type Hex } from "viem";
 import { SwapIntentT } from "./types";
 
 // The schema for the intent signature. It mirrors the fields on the SwapIntent Solidity struct.
@@ -38,7 +38,25 @@ export async function signIntent(
     return account.signTypedData!({
         domain: intentDomain(settler, chainId),
         types: INTENT_TYPES,
-        primaryType: "SwapIntent", 
+        primaryType: "SwapIntent",
         message: intent
     });
+}
+
+// The bid commitment hash: keccak256(abi.encodePacked(poolId, targetBlock, bidAmount)).
+// Same packing the AuctionServiceManager checks in challengeWinner, so a signed bid is a valid
+// fraud-proof if a lower winner was committed.
+export function bidHash(poolId: Hex, targetBlock: bigint, bidAmount: bigint): Hex {
+    return keccak256(encodePacked(["bytes32", "uint256", "uint256"], [poolId, targetBlock, bidAmount]));
+}
+
+// Sign a searcher bid. signMessage applies the EIP-191 prefix, matching the contract's
+// toEthSignedMessageHash(...) before ecrecover.
+export async function signBid(
+    account: Account,
+    poolId: Hex,
+    targetBlock: bigint,
+    bidAmount: bigint,
+): Promise<Hex> {
+    return account.signMessage!({ message: { raw: bidHash(poolId, targetBlock, bidAmount) } });
 }
