@@ -1,0 +1,16 @@
+# One image for both backend services; docker-compose `command` selects which to run
+# (npm run start-server / npm run start-operator).
+FROM node:20-alpine
+WORKDIR /app
+
+# Install deps first so the layer is cached when only source changes.
+COPY package*.json tsconfig.json ./
+RUN npm ci
+
+# Backend sources only (the Foundry contracts under src/contracts are not needed at runtime).
+COPY src/shared ./src/shared
+COPY src/backend ./src/backend
+COPY src/scripts ./src/scripts
+
+# Default to the public RPC; overridden per service in compose.
+CMD ["npm", "run", "start-server"]

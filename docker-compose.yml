@@ -1,0 +1,38 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  searcher-rpc:
+    build: { context: ., dockerfile: docker/Dockerfile.backend }
+    command: npm run start-server
+    env_file: .env
+    # Reach the chain on the host (Anvil/fork). Set RPC_URL=http://host.docker.internal:8545 in .env.
+    environment:
+      REDIS_URL: redis://redis:6379
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["8088:8088"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8088/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  avs-auction:
+    build: { context: ., dockerfile: docker/Dockerfile.backend }
+    command: npm run start-operator
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      redis:
+        condition: service_healthy
