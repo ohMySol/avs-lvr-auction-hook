@@ -21,7 +21,8 @@
     "dev-operator": "ts-node-dev --respawn --transpile-only src/backend/avs-auction/index.ts",
     "start-server": "ts-node src/backend/searcher-rpc/server.ts",
     "dev-server": "ts-node-dev --respawn --transpile-only src/backend/searcher-rpc/server.ts",
-    "demo": "ts-node src/scripts/fork-demo.ts"
+    "demo": "ts-node src/scripts/fork-demo.ts",
+    "demo:full": "ts-node src/scripts/full-demo.ts"
   },
   "dependencies": {
     "@types/node": "^25.9.1",
