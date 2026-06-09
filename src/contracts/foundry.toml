@@ -11,4 +11,10 @@ via_ir = false
 
 ignored_error_codes = [5667, 2072, 6321] # unused-param, unused-local-var, unnamed-return-variable
 
+# DeployFork reads config/networks and writes deployments at the repo root (two levels up).
+fs_permissions = [
+    { access = "read", path = "../../config" },
+    { access = "read-write", path = "../../deployments" },
+]
+
 [rpc_endpoints]
