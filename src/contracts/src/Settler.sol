@@ -182,8 +182,9 @@ contract Settler is ISettler, IUnlockCallback {
             ""
         );
 
+        // V4 credits the swapper's output as a positive delta (the pool owes them).
         int128 rawOut = intent.zeroForOne ? d.amount1() : d.amount0();
-        uint256 amountOut = uint256(-int256(rawOut));
+        uint256 amountOut = uint256(int256(rawOut));
         if (amountOut < intent.minAmountOut) revert ErrorsLib.Settler_SlippageExceeded();
 
         _settleDeltas(key, intent.zeroForOne, intent.user, d);
@@ -200,13 +201,15 @@ contract Settler is ISettler, IUnlockCallback {
         int128 deltaIn = zeroForOne ? delta.amount0() : delta.amount1();
         int128 deltaOut = zeroForOne ? delta.amount1() : delta.amount0();
 
-        if (deltaIn > 0) {
+        // V4 convention (see PoolSwapTest): a negative delta means this account owes the pool
+        // (pay via sync+transferFrom+settle); a positive delta means the pool owes it (take).
+        if (deltaIn < 0) {
             poolManager.sync(tokenIn);
-            IERC20(Currency.unwrap(tokenIn)).transferFrom(user, address(poolManager), uint256(int256(deltaIn)));
+            IERC20(Currency.unwrap(tokenIn)).transferFrom(user, address(poolManager), uint256(-int256(deltaIn)));
             poolManager.settle();
         }
-        if (deltaOut < 0) {
-            poolManager.take(tokenOut, user, uint256(-int256(deltaOut)));
+        if (deltaOut > 0) {
+            poolManager.take(tokenOut, user, uint256(int256(deltaOut)));
         }
     }
 
