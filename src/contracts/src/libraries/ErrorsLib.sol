@@ -10,20 +10,22 @@ library ErrorsLib {
     /// @notice Thrown during construction when a required address argument is the zero address
     error EigenAuctionHook_ZeroAddress();
 
-    /// @notice Thrown when an arb-flagged swap targets a block that has no committed auction winner
-    error EigenAuctionHook_AuctionNotCommitted();
-
-    /// @notice Thrown when an arb-flagged swap is executed by an address other than the committed winner
-    error EigenAuctionHook_NotWinner();
-
-    /// @notice Thrown when an arb-flagged swap targets a result that was invalidated by a challenge
-    error EigenAuctionHook_WinnerChallenged();
-
-    /// @notice Thrown when an LP has no rewards to claim for a position
-    error EigenAuctionHook_NothingToClaim();
-
     /// @notice Thrown when `addLiquidity`/`removeLiquidity` is called with a zero liquidity amount
     error EigenAuctionHook_ZeroLiquidity();
+
+    /// @notice Thrown when a swap reaches the hook from an address other than the registered settler
+    /// while the fallback period has not yet elapsed
+    error EigenAuctionHook_NotSettler();
+
+    /// @notice Thrown when `setSettler` is called by a non-owner or after the settler is already set
+    error EigenAuctionHook_Unauthorized();
+    
+    /// @notice Thrown when `setSettler` is called and the settler is already set
+    error EigenAuctionHook_SettlerAlreadySet();
+
+    /// @notice Thrown when the arb swap's actual pool liquidity differs from the operator's expected
+    /// value, indicating a JIT add landed between the operator's snapshot and the swap
+    error EigenAuctionHook_LiquidityMismatch();
 
     /* AuctionServiceManager / MockAuctionServiceManager Errors */
 
@@ -104,12 +106,6 @@ library ErrorsLib {
     /// @notice Thrown when a user intent's `poolId` does not match the pool being settled
     error Settler_WrongPool();
 
-    /* EigenAuctionHook Errors — pool lock */
-
-    /// @notice Thrown when a swap reaches the hook from an address other than the registered settler
-    /// while the fallback period has not yet elapsed
-    error EigenAuctionHook_NotSettler();
-
-    /// @notice Thrown when `setSettler` is called by a non-owner or after the settler is already set
-    error EigenAuctionHook_Unauthorized();
+    /// @notice Thrown when an ERC20 `transferFrom` returns false during settlement
+    error Settler_TransferFailed();
 }

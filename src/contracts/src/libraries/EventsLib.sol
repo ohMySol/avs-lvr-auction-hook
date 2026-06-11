@@ -52,28 +52,24 @@ library EventsLib {
 
     /* EigenAuctionHook Events  */
 
-    /// @notice Emitted when a winning arb swap settles and the bid is folded into LP rewards
+    /// @notice Emitted when a winning arb swap settles and the operator's reward is folded into LP rewards
     /// @param poolId ID of the pool
-    /// @param winner Address of the auction winner charged for the arb
-    /// @param currencyIndex Which pool currency the bid was taken in (0 = currency0, 1 = currency1)
-    /// @param bidAmount Amount distributed to the pool's in-range liquidity providers
+    /// @param winner Address of the auction winner who paid the reward
+    /// @param rewardAmount Amount of currency0 distributed to the pool's in-range liquidity providers
     event ArbitrageSettled(
         PoolId indexed poolId,
         address indexed winner,
-        uint8 currencyIndex,
-        uint256 bidAmount
+        uint256 rewardAmount
     );
 
     /// @notice Emitted when an LP claims rewards for a position
     /// @param poolId ID of the pool
     /// @param lp Liquidity provider (position owner) address
-    /// @param amount0 Reward paid in currency0
-    /// @param amount1 Reward paid in currency1
+    /// @param amount Reward paid in currency0
     event RewardsClaimed(
         PoolId indexed poolId,
         address indexed lp,
-        uint256 amount0,
-        uint256 amount1
+        uint256 amount
     );
 
     /// @notice Emitted when an LP adds liquidity through the hook's own entry point

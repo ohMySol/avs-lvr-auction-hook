@@ -65,13 +65,23 @@ interface ISettler {
     ///   2. Calls `hook.recordSettlement()` on `key.hooks` to reset the fallback timer.
     ///   3. Calls `poolManager.unlock`, inside which all swaps execute atomically.
     ///
+    /// Inside the unlock, if `arb.amountSpecified != 0`:
+    ///   a. The caller's `rewardAmount` of currency0 is pulled via transferFrom and deposited into
+    ///      the pool manager (sync + transferFrom + settle) BEFORE the arb swap. The hook collects
+    ///      this in `afterSwap` and distributes it to in-range LPs. The caller must have pre-approved
+    ///      this contract for at least `rewardAmount` of the pool's currency0.
+    ///   b. The current pool liquidity is read and passed as `expectedLiquidity` in hookData, so the
+    ///      hook can detect and revert on any JIT add that lands between this read and the swap.
+    ///
     /// Reverts if both `arb.amountSpecified == 0` and `intents` is empty.
     /// Reverts if any intent's `poolId` does not match `key.toId()`.
     ///
     /// @param key The pool to settle.
+    /// @param rewardAmount Amount of currency0 to pay to LPs as the arb reward. The caller must have
+    ///        approved this contract for at least this amount. Pass 0 to skip the reward payment.
     /// @param arb Top-of-block rebalance swap. Set `amountSpecified = 0` to skip Step 1.
     /// @param intents Ordered list of user intents to fill at the post-arb price.
-    function settle(PoolKey calldata key, SwapParams calldata arb, SwapIntent[] calldata intents) external;
+    function settle(PoolKey calldata key, uint256 rewardAmount, SwapParams calldata arb, SwapIntent[] calldata intents) external;
 
     /* NONCE MANAGEMENT */
 

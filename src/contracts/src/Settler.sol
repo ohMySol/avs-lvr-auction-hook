@@ -9,6 +9,7 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {SwapParams} from "v4-core/types/PoolOperation.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 
 import {ISettler, SwapIntent} from "./interfaces/ISettler.sol";
 import {IAuctionServiceManager, AuctionResult} from "./interfaces/IAuctionServiceManager.sol";
@@ -30,30 +31,26 @@ interface IHookSettlement {
 /// @notice Chain-wide atomic settlement contract for all EigenAuction pools. Deploy once per chain;
 /// register on each pool's hook via `hook.setSettler(address(this))`.
 ///
-/// The AVS-committed winning operator calls `settle(key, arb, intents)` once per pool per block
-/// to execute two phases inside a single Uniswap V4 flash-accounting context:
+/// The AVS-committed winning operator calls `settle(key, rewardAmount, arb, intents)` once per
+/// pool per block to execute two phases inside a single Uniswap V4 flash-accounting context:
 ///
 /// Step 1 — Top-of-block arb rebalance.
-/// The operator's swap moves the pool to the external market price. `EigenAuctionHook` intercepts
-/// it (arb-flagged hookData), skims the committed bid from the output, and folds it into the LP
-/// reward-growth accumulator.
+/// Before executing the arb swap, the operator's `rewardAmount` of currency0 is deposited into
+/// the pool manager. The hook collects it in `afterSwap` and distributes it to in-range LPs.
+/// The pool's current liquidity is read immediately before the swap and passed as `expectedLiquidity`
+/// in hookData, so the hook can revert if a JIT add lands between the read and the swap.
 ///
 /// Step 2 — User intent fills.
 /// Each `SwapIntent` is signature-verified, pool-checked, and executed at the post-arb price.
-/// Users pre-approve this contract for their input tokens and submit signed intents to the
-/// operator's private RPC rather than the public mempool.
-///
-/// All token flows settle inside `unlockCallback` via V4's sync / transferFrom / settle / take
-/// pattern so no tokens ever sit idle in this contract between calls.
 contract Settler is ISettler, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
 
     /* CONSTANTS */
 
     bytes32 private constant _DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
-    // poolId is included so intents cannot be replayed across pools served by the same settler.
     bytes32 private constant _INTENT_TYPEHASH = keccak256(
         "SwapIntent(address user,bytes32 poolId,bool zeroForOne,uint128 amountIn,uint128 minAmountOut,uint64 nonce,uint64 deadline)"
     );
@@ -71,7 +68,7 @@ contract Settler is ISettler, IUnlockCallback {
 
     /* STORAGE */
 
-    /// @dev user => (nonce >> 8) => 256-bit bitmap. Bit `nonce & 0xff` set means nonce is spent.
+    /// @dev user => (nonce >> 8) => 256-bit bitmap.
     mapping(address => mapping(uint248 => uint256)) private _nonces;
 
     /* CONSTRUCTOR */
@@ -95,7 +92,6 @@ contract Settler is ISettler, IUnlockCallback {
 
     /* MODIFIERS */
 
-    /// @dev Restricts a function to calls from the pool manager (the unlock callback path).
     modifier onlyPoolManager() {
         if (msg.sender != address(poolManager)) revert ErrorsLib.Settler_NotPoolManager();
         _;
@@ -104,42 +100,63 @@ contract Settler is ISettler, IUnlockCallback {
     /* SETTLEMENT */
 
     /// @inheritdoc ISettler
-    function settle(PoolKey calldata key, SwapParams calldata arb, SwapIntent[] calldata intents) external {
+    function settle(
+        PoolKey calldata key,
+        uint256 rewardAmount,
+        SwapParams calldata arb,
+        SwapIntent[] calldata intents
+    ) external {
         if (arb.amountSpecified == 0 && intents.length == 0) revert ErrorsLib.Settler_NothingToSettle();
 
         PoolId poolId = key.toId();
         AuctionResult memory result = avs.getWinner(poolId, block.number);
-        if (!result.committed) revert ErrorsLib.Settler_AuctionNotCommitted();
-        if (result.challenged) revert ErrorsLib.Settler_WinnerChallenged();
+        if (!result.committed)  revert ErrorsLib.Settler_AuctionNotCommitted();
+        if (result.challenged)  revert ErrorsLib.Settler_WinnerChallenged();
         if (msg.sender != result.winner) revert ErrorsLib.Settler_NotWinner();
 
-        // Reset the fallback liveness timer on this pool's hook.
         IHookSettlement(address(key.hooks)).recordSettlement();
 
-        poolManager.unlock(abi.encode(msg.sender, key, arb, intents));
+        poolManager.unlock(abi.encode(msg.sender, key, rewardAmount, arb, intents));
 
         emit EventsLib.BlockSettled(poolId, block.number, msg.sender);
     }
 
     /* V4 UNLOCK CALLBACK */
 
-    /// @notice Called by the pool manager after `unlock`. Executes all swaps atomically.
-    /// @dev Only the pool manager may call this.
     function unlockCallback(bytes calldata data) external override onlyPoolManager returns (bytes memory) {
-        (address operator, PoolKey memory key, SwapParams memory arb, SwapIntent[] memory intents) =
-            abi.decode(data, (address, PoolKey, SwapParams, SwapIntent[]));
+        (
+            address operator,
+            PoolKey memory key,
+            uint256 rewardAmount,
+            SwapParams memory arb,
+            SwapIntent[] memory intents
+        ) = abi.decode(data, (address, PoolKey, uint256, SwapParams, SwapIntent[]));
 
-        // Step 1: arb-flagged swap — hook skims bid and credits LPs.
+        // Step 1: arb swap with pre-funded LP reward.
         if (arb.amountSpecified != 0) {
-            BalanceDelta d = poolManager.swap(key, arb, abi.encode(true));
+            PoolId poolId = key.toId();
+
+            // Transfer the operator's reward directly to the hook before the swap. The hook
+            // distributes it in afterSwap after the tick crossing. The operator must have approved
+            // this contract for at least rewardAmount of currency0.
+            if (rewardAmount > 0) {
+                bool ok = IERC20(Currency.unwrap(key.currency0)).transferFrom(
+                    operator, address(key.hooks), rewardAmount
+                );
+                if (!ok) revert ErrorsLib.Settler_TransferFailed();
+            }
+
+            // Snapshot pool liquidity for JIT detection. The hook will revert if liquidity changed
+            // between here and the swap (meaning a JIT add slipped in).
+            uint256 expectedLiquidity = poolManager.getLiquidity(poolId);
+
+            BalanceDelta d = poolManager.swap(
+                key, arb, abi.encode(true, rewardAmount, expectedLiquidity)
+            );
             _settleDeltas(key, arb.zeroForOne, operator, d);
         }
 
         // Step 2: user intent fills at the post-arb price.
-        // Note: Atm this is working in a loop, and each intent executes as a separate swap inside 1 tx.
-        // Yes the order of swaps is not possible to change, but every user got a different price - that's a POC limitation.
-        // Solution: in V2 I will switch to batch settlement via net imbalance. Net imbalance - is the only amount that
-        // touches the AMM, everything else can be matches user-agains-user.
         uint256 n = intents.length;
         for (uint256 i; i < n; ++i) {
             _fill(key, intents[i]);
@@ -163,7 +180,6 @@ contract Settler is ISettler, IUnlockCallback {
 
     /* INTERNAL */
 
-    /// @dev Verify pool match, consume nonce, verify signature, execute swap, check slippage, settle.
     function _fill(PoolKey memory key, SwapIntent memory intent) private {
         if (PoolId.unwrap(key.toId()) != intent.poolId) revert ErrorsLib.Settler_WrongPool();
         if (block.timestamp > intent.deadline)          revert ErrorsLib.Settler_IntentExpired();
@@ -182,7 +198,6 @@ contract Settler is ISettler, IUnlockCallback {
             ""
         );
 
-        // V4 credits the swapper's output as a positive delta (the pool owes them).
         int128 rawOut = intent.zeroForOne ? d.amount1() : d.amount0();
         uint256 amountOut = uint256(int256(rawOut));
         if (amountOut < intent.minAmountOut) revert ErrorsLib.Settler_SlippageExceeded();
@@ -192,20 +207,20 @@ contract Settler is ISettler, IUnlockCallback {
         emit EventsLib.IntentFilled(key.toId(), intent.user, intent.zeroForOne, intent.amountIn, amountOut);
     }
 
-    /// @dev Pull input from `user` into the pool and push output from the pool to `user`.
     function _settleDeltas(PoolKey memory key, bool zeroForOne, address user, BalanceDelta delta) private {
         (Currency tokenIn, Currency tokenOut) = zeroForOne
             ? (key.currency0, key.currency1)
             : (key.currency1, key.currency0);
 
-        int128 deltaIn = zeroForOne ? delta.amount0() : delta.amount1();
+        int128 deltaIn  = zeroForOne ? delta.amount0() : delta.amount1();
         int128 deltaOut = zeroForOne ? delta.amount1() : delta.amount0();
 
-        // V4 convention (see PoolSwapTest): a negative delta means this account owes the pool
-        // (pay via sync+transferFrom+settle); a positive delta means the pool owes it (take).
         if (deltaIn < 0) {
             poolManager.sync(tokenIn);
-            IERC20(Currency.unwrap(tokenIn)).transferFrom(user, address(poolManager), uint256(-int256(deltaIn)));
+            bool ok = IERC20(Currency.unwrap(tokenIn)).transferFrom(
+                user, address(poolManager), uint256(-int256(deltaIn))
+            );
+            if (!ok) revert ErrorsLib.Settler_TransferFailed();
             poolManager.settle();
         }
         if (deltaOut > 0) {
@@ -213,16 +228,14 @@ contract Settler is ISettler, IUnlockCallback {
         }
     }
 
-    /// @dev Mark `nonce` as used for `user`; revert if already spent.
     function _useNonce(address user, uint64 nonce) private {
         uint248 word = uint248(nonce >> 8);
-        uint256 bit = 1 << (nonce & 0xff);
+        uint256 bit  = 1 << (nonce & 0xff);
         uint256 prev = _nonces[user][word];
         if (prev & bit != 0) revert ErrorsLib.Settler_NonceUsed();
         _nonces[user][word] = prev | bit;
     }
 
-    /// @dev Verify the EIP-712 signature on `intent` matches `intent.user`.
     function _verifySignature(SwapIntent memory intent) private view {
         bytes32 structHash = keccak256(abi.encode(
             _INTENT_TYPEHASH,
@@ -235,17 +248,13 @@ contract Settler is ISettler, IUnlockCallback {
             intent.deadline
         ));
         bytes32 digest = keccak256(abi.encodePacked(hex"1901", DOMAIN_SEPARATOR, structHash));
-
         address signer = _recover(digest, intent.signature);
         if (signer == address(0) || signer != intent.user) revert ErrorsLib.Settler_InvalidSignature();
     }
 
-    /// @dev Recover an ECDSA signer from a 65-byte (r, s, v) signature over `digest`.
     function _recover(bytes32 digest, bytes memory sig) private pure returns (address) {
         if (sig.length != 65) return address(0);
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
+        bytes32 r; bytes32 s; uint8 v;
         assembly {
             r := mload(add(sig, 0x20))
             s := mload(add(sig, 0x40))
