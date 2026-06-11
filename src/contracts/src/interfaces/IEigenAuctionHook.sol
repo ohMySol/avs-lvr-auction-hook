@@ -35,6 +35,22 @@ struct FreshLiquidity {
     uint128 inRange;
 }
 
+/// @notice Payload passed through `poolManager.unlock` for an LP add/remove routed through the hook.
+/// @dev `liquidityDelta` is positive to add and negative to remove; `lp` is the real position owner
+/// the hook attributes the reward ledger to (the hook itself is the V4-level position owner).
+/// @param key The pool being modified.
+/// @param lp The liquidity provider that owns the position.
+/// @param tickLower Lower tick of the position's range.
+/// @param tickUpper Upper tick of the position's range.
+/// @param liquidityDelta Signed liquidity change applied to the position.
+struct LiquidityCallback {
+    PoolKey key;
+    address lp;
+    int24 tickLower;
+    int24 tickUpper;
+    int256 liquidityDelta;
+}
+
 /// @title IEigenAuctionHook
 /// @author ohMySol
 /// @notice Interface for `EigenAuctionHook` — a Uniswap V4 hook that implements a locked
@@ -81,6 +97,30 @@ interface IEigenAuctionHook {
     function recordSettlement() external;
 
     /* LP ACTIONS */
+
+    /// @notice Supplies liquidity to the pool through the hook itself, so the hook can attribute the
+    /// position — and the LVR rewards it earns — to the calling LP.
+    /// @dev The hook is the contract V4 sees as the position owner, so an LP cannot add liquidity to
+    /// this pool through a generic router and still claim rewards: routing through here is the
+    /// supported path. The caller must have approved the hook to pull both currencies. The position
+    /// is keyed in the reward ledger by the caller; same-block adds are JIT-guarded as usual.
+    ///
+    /// @param key The pool to add liquidity to.
+    /// @param tickLower Lower tick of the position's range.
+    /// @param tickUpper Upper tick of the position's range.
+    /// @param liquidity Liquidity units to add.
+    function addLiquidity(PoolKey calldata key, int24 tickLower, int24 tickUpper, uint128 liquidity) external;
+
+    /// @notice Withdraws liquidity previously supplied through `addLiquidity`, returning principal
+    /// (and accrued swap fees) to the caller.
+    /// @dev Does not auto-claim LVR rewards — those are settled into the position and remain claimable
+    /// via `claimRewards`. Reverts if the caller tries to remove more than their tracked position.
+    ///
+    /// @param key The pool to remove liquidity from.
+    /// @param tickLower Lower tick of the position's range.
+    /// @param tickUpper Upper tick of the position's range.
+    /// @param liquidity Liquidity units to remove.
+    function removeLiquidity(PoolKey calldata key, int24 tickLower, int24 tickUpper, uint128 liquidity) external;
 
     /// @notice Claims the caller's accrued rewards for a single liquidity position, in both currencies.
     /// @dev Settles the position then transfers its full pending currency0 and currency1 balances.

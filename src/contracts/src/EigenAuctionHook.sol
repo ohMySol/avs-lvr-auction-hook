@@ -5,6 +5,7 @@ import {BaseHook} from "v4-hooks-public/src/base/BaseHook.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
@@ -17,7 +18,7 @@ import {FullMath} from "v4-core/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-core/libraries/FixedPoint128.sol";
 import {FixedPoint96} from "v4-core/libraries/FixedPoint96.sol";
 
-import {IEigenAuctionHook, Position, FreshLiquidity} from "./interfaces/IEigenAuctionHook.sol";
+import {IEigenAuctionHook, Position, FreshLiquidity, LiquidityCallback} from "./interfaces/IEigenAuctionHook.sol";
 import {IAuctionServiceManager} from "./interfaces/IAuctionServiceManager.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {EventsLib} from "./libraries/EventsLib.sol";
@@ -120,6 +121,88 @@ contract EigenAuctionHook is BaseHook, IEigenAuctionHook {
     function recordSettlement() external {
         if (msg.sender != settler) revert ErrorsLib.EigenAuctionHook_NotSettler();
         lastSettledBlock = block.number;
+    }
+
+    /* LP LIQUIDITY */
+
+    /// @inheritdoc IEigenAuctionHook
+    function addLiquidity(PoolKey calldata key, int24 tickLower, int24 tickUpper, uint128 liquidity) external {
+        if (liquidity == 0) revert ErrorsLib.EigenAuctionHook_ZeroLiquidity();
+        poolManager.unlock(
+            abi.encode(
+                LiquidityCallback({
+                    key: key,
+                    lp: msg.sender,
+                    tickLower: tickLower,
+                    tickUpper: tickUpper,
+                    liquidityDelta: int256(uint256(liquidity))
+                })
+            )
+        );
+        emit EventsLib.LiquidityAdded(key.toId(), msg.sender, tickLower, tickUpper, liquidity);
+    }
+
+    /// @inheritdoc IEigenAuctionHook
+    function removeLiquidity(PoolKey calldata key, int24 tickLower, int24 tickUpper, uint128 liquidity) external {
+        if (liquidity == 0) revert ErrorsLib.EigenAuctionHook_ZeroLiquidity();
+        poolManager.unlock(
+            abi.encode(
+                LiquidityCallback({
+                    key: key,
+                    lp: msg.sender,
+                    tickLower: tickLower,
+                    tickUpper: tickUpper,
+                    liquidityDelta: -int256(uint256(liquidity))
+                })
+            )
+        );
+        emit EventsLib.LiquidityRemoved(key.toId(), msg.sender, tickLower, tickUpper, liquidity);
+    }
+
+    /// @notice Pool-manager unlock callback for the hook's own LP add/remove flow.
+    /// @dev Only the pool manager may call this. The hook is the V4-level position owner, so positions
+    /// are kept apart in the pool by using the LP address as the position salt; the LP is also passed
+    /// through `hookData` so `_afterAddLiquidity`/`_afterRemoveLiquidity` attribute the reward ledger
+    /// to the real owner rather than to the hook.
+    /// @dev `onlyPoolManager` is inherited from `ImmutableState` (via `BaseHook`). The function is
+    /// dispatched by the pool manager on selector, so it needs no interface inheritance.
+    function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
+        LiquidityCallback memory cb = abi.decode(data, (LiquidityCallback));
+
+        (BalanceDelta delta,) = poolManager.modifyLiquidity(
+            cb.key,
+            ModifyLiquidityParams({
+                tickLower: cb.tickLower,
+                tickUpper: cb.tickUpper,
+                liquidityDelta: cb.liquidityDelta,
+                salt: bytes32(uint256(uint160(cb.lp)))
+            }),
+            ""
+        );
+
+        // V4 skips a hook's own liquidity callbacks on self-calls (the `noSelfCall` guard), so the
+        // reward ledger is updated inline here — keyed to the real LP — rather than from
+        // `_afterAddLiquidity`/`_afterRemoveLiquidity`, which only fire for external routers.
+        _recordLiquidity(cb.key.toId(), cb.lp, cb.tickLower, cb.tickUpper, bytes32(0), cb.liquidityDelta);
+
+        // `callerDelta` covers principal plus any swap fees accrued to the position. Pay the owed legs
+        // from the LP (add) and forward credited legs to the LP (remove).
+        _settlePrincipal(cb.key.currency0, delta.amount0(), cb.lp);
+        _settlePrincipal(cb.key.currency1, delta.amount1(), cb.lp);
+        return "";
+    }
+
+    /// @dev Settles one currency leg of an LP modify against the pool manager. A negative amount is
+    /// owed to the pool and is pulled from the LP via `transferFrom`; a positive amount is credited
+    /// and taken straight to the LP.
+    function _settlePrincipal(Currency currency, int128 amount, address lp) private {
+        if (amount < 0) {
+            poolManager.sync(currency);
+            IERC20Minimal(Currency.unwrap(currency)).transferFrom(lp, address(poolManager), uint256(uint128(-amount)));
+            poolManager.settle();
+        } else if (amount > 0) {
+            poolManager.take(currency, lp, uint256(uint128(amount)));
+        }
     }
 
     /* REWARD CLAIMING */
@@ -264,12 +347,9 @@ contract EigenAuctionHook is BaseHook, IEigenAuctionHook {
         BalanceDelta,
         bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
-        PoolId poolId = key.toId();
-        _updatePosition(key, sender, params.tickLower, params.tickUpper, params.salt, params.liquidityDelta);
-        // Track the in-range JIT cohort so it is excluded from this block's reward denominator.
-        if (params.liquidityDelta > 0 && _isInRange(poolId, params.tickLower, params.tickUpper)) {
-            _accrueFresh(poolId, uint128(uint256(params.liquidityDelta)));
-        }
+        // Reached only for liquidity added through an external router; the hook's own add is recorded
+        // inline in `unlockCallback` because V4's `noSelfCall` skips this callback for self-calls.
+        _recordLiquidity(key.toId(), sender, params.tickLower, params.tickUpper, params.salt, params.liquidityDelta);
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
@@ -281,14 +361,8 @@ contract EigenAuctionHook is BaseHook, IEigenAuctionHook {
         BalanceDelta,
         bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
-        PoolId poolId = key.toId();
-        _updatePosition(key, sender, params.tickLower, params.tickUpper, params.salt, params.liquidityDelta);
-        // Net same-block removals out of the JIT cohort so add-then-remove cancels cleanly.
-        FreshLiquidity storage f = _fresh[poolId];
-        if (f.blockNumber == uint64(block.number) && _isInRange(poolId, params.tickLower, params.tickUpper)) {
-            uint128 dec = uint128(uint256(-params.liquidityDelta));
-            f.inRange = f.inRange > dec ? f.inRange - dec : 0;
-        }
+        // External-router path only (see `_afterAddLiquidity`).
+        _recordLiquidity(key.toId(), sender, params.tickLower, params.tickUpper, params.salt, params.liquidityDelta);
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
@@ -335,19 +409,46 @@ contract EigenAuctionHook is BaseHook, IEigenAuctionHook {
         return active > fresh ? active - fresh : 0;
     }
 
-    /// @dev Settles a position, then applies the liquidity delta. Additions enter the position's
-    /// fresh (same-block) bucket; they earn nothing until they mature in a later block — this is the
-    /// per-position half of the JIT guard. Removals drain the fresh bucket first, so an atomic
-    /// add ==> arb ==> remove leaves no mature liquidity behind and accrues nothing.
-    function _updatePosition(
-        PoolKey calldata key,
+    /// @dev Records a liquidity change in the reward ledger and maintains the pool-level JIT cohort.
+    /// Shared by the hook's own `unlockCallback` (self-calls, where V4 skips the liquidity callbacks)
+    /// and by `_afterAddLiquidity`/`_afterRemoveLiquidity` for positions opened through an external
+    /// router. `owner_`/`salt` identify the position in the reward ledger.
+    function _recordLiquidity(
+        PoolId poolId,
         address owner_,
         int24 tickLower,
         int24 tickUpper,
         bytes32 salt,
         int256 liquidityDelta
     ) private {
-        PoolId poolId = key.toId();
+        _updatePosition(poolId, owner_, tickLower, tickUpper, salt, liquidityDelta);
+        if (liquidityDelta > 0) {
+            // Track the in-range JIT cohort so it is excluded from this block's reward denominator.
+            if (_isInRange(poolId, tickLower, tickUpper)) {
+                _accrueFresh(poolId, uint128(uint256(liquidityDelta)));
+            }
+        } else if (liquidityDelta < 0) {
+            // Net same-block removals out of the JIT cohort so add-then-remove cancels cleanly.
+            FreshLiquidity storage f = _fresh[poolId];
+            if (f.blockNumber == uint64(block.number) && _isInRange(poolId, tickLower, tickUpper)) {
+                uint128 dec = uint128(uint256(-liquidityDelta));
+                f.inRange = f.inRange > dec ? f.inRange - dec : 0;
+            }
+        }
+    }
+
+    /// @dev Settles a position, then applies the liquidity delta. Additions enter the position's
+    /// fresh (same-block) bucket; they earn nothing until they mature in a later block — this is the
+    /// per-position half of the JIT guard. Removals drain the fresh bucket first, so an atomic
+    /// add ==> arb ==> remove leaves no mature liquidity behind and accrues nothing.
+    function _updatePosition(
+        PoolId poolId,
+        address owner_,
+        int24 tickLower,
+        int24 tickUpper,
+        bytes32 salt,
+        int256 liquidityDelta
+    ) private {
         bytes32 pk = _positionKey(poolId, owner_, tickLower, tickUpper, salt);
 
         _settle(poolId, pk, tickLower, tickUpper);

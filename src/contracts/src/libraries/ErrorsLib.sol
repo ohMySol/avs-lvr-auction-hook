@@ -22,6 +22,9 @@ library ErrorsLib {
     /// @notice Thrown when an LP has no rewards to claim for a position
     error EigenAuctionHook_NothingToClaim();
 
+    /// @notice Thrown when `addLiquidity`/`removeLiquidity` is called with a zero liquidity amount
+    error EigenAuctionHook_ZeroLiquidity();
+
     /* AuctionServiceManager / MockAuctionServiceManager Errors */
 
     /// @notice Thrown by MockAuctionServiceManager when the caller is not the mock owner

@@ -76,6 +76,34 @@ library EventsLib {
         uint256 amount1
     );
 
+    /// @notice Emitted when an LP adds liquidity through the hook's own entry point
+    /// @param poolId ID of the pool
+    /// @param lp Liquidity provider that supplied the position
+    /// @param tickLower Lower tick of the position's range
+    /// @param tickUpper Upper tick of the position's range
+    /// @param liquidity Liquidity units added
+    event LiquidityAdded(
+        PoolId indexed poolId,
+        address indexed lp,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity
+    );
+
+    /// @notice Emitted when an LP removes liquidity through the hook's own entry point
+    /// @param poolId ID of the pool
+    /// @param lp Liquidity provider that withdrew the position
+    /// @param tickLower Lower tick of the position's range
+    /// @param tickUpper Upper tick of the position's range
+    /// @param liquidity Liquidity units removed
+    event LiquidityRemoved(
+        PoolId indexed poolId,
+        address indexed lp,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity
+    );
+
     /* Settler Events */
 
     /// @notice Emitted when a user swap intent is successfully filled

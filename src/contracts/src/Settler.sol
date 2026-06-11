@@ -107,8 +107,8 @@ contract Settler is ISettler, IUnlockCallback {
     function settle(PoolKey calldata key, SwapParams calldata arb, SwapIntent[] calldata intents) external {
         if (arb.amountSpecified == 0 && intents.length == 0) revert ErrorsLib.Settler_NothingToSettle();
 
-        PoolId pid = key.toId();
-        AuctionResult memory result = avs.getWinner(pid, block.number);
+        PoolId poolId = key.toId();
+        AuctionResult memory result = avs.getWinner(poolId, block.number);
         if (!result.committed) revert ErrorsLib.Settler_AuctionNotCommitted();
         if (result.challenged) revert ErrorsLib.Settler_WinnerChallenged();
         if (msg.sender != result.winner) revert ErrorsLib.Settler_NotWinner();
@@ -118,7 +118,7 @@ contract Settler is ISettler, IUnlockCallback {
 
         poolManager.unlock(abi.encode(msg.sender, key, arb, intents));
 
-        emit EventsLib.BlockSettled(pid, block.number, msg.sender);
+        emit EventsLib.BlockSettled(poolId, block.number, msg.sender);
     }
 
     /* V4 UNLOCK CALLBACK */
@@ -136,7 +136,7 @@ contract Settler is ISettler, IUnlockCallback {
         }
 
         // Step 2: user intent fills at the post-arb price.
-        // ! Atm this is working in a loop, and each intent executes as a separate swap inside 1 tx.
+        // Note: Atm this is working in a loop, and each intent executes as a separate swap inside 1 tx.
         // Yes the order of swaps is not possible to change, but every user got a different price - that's a POC limitation.
         // Solution: in V2 I will switch to batch settlement via net imbalance. Net imbalance - is the only amount that
         // touches the AMM, everything else can be matches user-agains-user.
