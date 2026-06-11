@@ -2,13 +2,13 @@
 // live deployment (`IS_LIVE`) and a connected account, so the UI degrades to the mock data layer when
 // no artifact is present. Writes await their receipt before resolving so callers can refetch.
 import React from "react";
-import { useAccount, useConnect, useDisconnect, useReadContract, useWriteContract, useWatchContractEvent, useSignTypedData } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useReadContract, useWriteContract, useWatchContractEvent, useSignTypedData, useBlockNumber, useChainId } from "wagmi";
 import { readContract, waitForTransactionReceipt } from "@wagmi/core";
-import { maxUint256, zeroHash, parseUnits } from "viem";
+import { maxUint256, zeroHash, parseUnits, formatUnits } from "viem";
 import { wagmiConfig } from "./wagmi.js";
 import { DEPLOYMENT, POOL_KEY, IS_LIVE, CHAIN_ID, INTENT_URL } from "./deployment.js";
 import { hookAbi, stateViewAbi, erc20Abi } from "./abis.js";
-import { getSqrtRatioAtTick, getLiquidityForAmounts, priceFromSqrtX96 } from "./v4Math.js";
+import { getSqrtRatioAtTick, getLiquidityForAmounts, getAmountsForLiquidity, priceFromSqrtX96 } from "./v4Math.js";
 
 // The seeded/frontend LP uses the full usable range at salt 0 (matches SeedLiquidity + DeployTestnet).
 export const FULL_RANGE_LOWER = -887220;
@@ -52,14 +52,14 @@ export function usePoolPrice() {
   };
 }
 
-// Unclaimed LVR rewards for `account`'s full-range position, per currency (raw units + decimals).
+// Pending LVR rewards for `account`'s full-range position, in currency0. Paid out on removeLiquidity.
 export function useEarned(account) {
   const { data, refetch } = useReadContract({
     address: HOOK, abi: hookAbi, functionName: "earned",
     args: [POOL_KEY, account, FULL_RANGE_LOWER, FULL_RANGE_UPPER, zeroHash],
     query: { enabled: IS_LIVE && !!account, refetchInterval: 12_000 },
   });
-  return { amount0: data?.[0], amount1: data?.[1], dec0: DEC0, dec1: DEC1, refetch };
+  return { amount: data, dec: DEC0, refetch };
 }
 
 // The hook-tracked liquidity of `account`'s full-range position.
@@ -88,6 +88,51 @@ export function useArbEvents(onSettled) {
   useWatchContractEvent({ address: HOOK, abi: hookAbi, eventName: "ArbitrageSettled", onLogs: onSettled, enabled: IS_LIVE });
 }
 
+// Real block number and chain name from the connected wallet's chain.
+const CHAIN_NAMES = { 1: 'Ethereum', 11155111: 'Sepolia', 31337: 'Anvil', 8453: 'Base', 84532: 'Base Sepolia' };
+export function useChainInfo() {
+  const { data: blockNumber } = useBlockNumber({ query: { enabled: IS_LIVE, refetchInterval: 12_000 } });
+  const chainId = useChainId();
+  return {
+    blockNumber: blockNumber != null ? Number(blockNumber) : null,
+    chainName: CHAIN_NAMES[chainId] ?? `Chain ${chainId}`,
+  };
+}
+
+// Total pool liquidity from V4 StateView.
+export function usePoolLiquidity() {
+  const { data, refetch } = useReadContract({
+    address: STATE_VIEW, abi: stateViewAbi, functionName: "getLiquidity", args: [POOL_ID],
+    query: { enabled: IS_LIVE, refetchInterval: 12_000 },
+  });
+  return { poolLiquidity: data, refetch };
+}
+
+// Computed position amounts: derives token amounts from on-chain liquidity + pool sqrtPrice.
+// Returns null when not live or position is empty.
+export function usePositionAmounts(account) {
+  const { liquidity: posLiquidity } = usePositionLiquidity(account);
+  const { sqrtPriceX96, price: poolPrice } = usePoolPrice();
+  const { poolLiquidity } = usePoolLiquidity();
+
+  if (!posLiquidity || posLiquidity === 0n || !sqrtPriceX96) return null;
+
+  const sqrtA = getSqrtRatioAtTick(FULL_RANGE_LOWER);
+  const sqrtB = getSqrtRatioAtTick(FULL_RANGE_UPPER);
+  const { amount0, amount1 } = getAmountsForLiquidity(sqrtPriceX96, sqrtA, sqrtB, posLiquidity);
+
+  const poolShareBps = poolLiquidity && poolLiquidity > 0n
+    ? Number((posLiquidity * 10000n) / poolLiquidity)
+    : 0;
+
+  const amount0Human = Number(formatUnits(amount0, DEC0));
+  const amount1Human = Number(formatUnits(amount1, DEC1));
+  // Value in currency0 terms: amount0 + amount1 / (c1/c0 price)
+  const valueC0 = poolPrice != null ? amount0Human + amount1Human / poolPrice : amount0Human;
+
+  return { posLiquidity, poolShareBps, amount0Human, amount1Human, valueC0, poolPrice };
+}
+
 /* ---------- writes ---------- */
 
 async function approveIfNeeded(writeContractAsync, account, token, amount) {
@@ -96,20 +141,6 @@ async function approveIfNeeded(writeContractAsync, account, token, amount) {
     const hash = await writeContractAsync({ address: token, abi: erc20Abi, functionName: "approve", args: [HOOK, maxUint256] });
     await waitForTransactionReceipt(wagmiConfig, { hash });
   }
-}
-
-// Claim the caller's accrued LVR rewards.
-export function useClaim() {
-  const { writeContractAsync, isPending } = useWriteContract();
-  async function claim() {
-    const hash = await writeContractAsync({
-      address: HOOK, abi: hookAbi, functionName: "claimRewards",
-      args: [POOL_KEY, FULL_RANGE_LOWER, FULL_RANGE_UPPER, zeroHash],
-    });
-    await waitForTransactionReceipt(wagmiConfig, { hash });
-    return hash;
-  }
-  return { claim, isPending };
 }
 
 // Drip both FaucetTokens to the caller.
@@ -186,7 +217,10 @@ export function useSubmitIntent() {
   async function submitIntent({ account, zeroForOne, amountIn, minAmountOut, onSigned }) {
     if (!DEPLOYMENT?.settler || !POOL_ID) throw new Error("No deployment artifact — run the deploy script first");
 
-    const nonce = BigInt(Date.now());
+    // Use 64 bits of CSPRNG output — collision-free even under rapid submission.
+    const rand = new Uint32Array(2);
+    crypto.getRandomValues(rand);
+    const nonce = (BigInt(rand[0]) << 32n) | BigInt(rand[1]);
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
 
     const domain = {

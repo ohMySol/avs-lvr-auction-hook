@@ -21,6 +21,9 @@ export const DEPLOYMENT = byChainId[String(CHAIN_ID)] ?? null;
 // True when a real deployment is wired in; the UI uses this to choose live vs mock data.
 export const IS_LIVE = DEPLOYMENT != null;
 
+// True on testnets (Sepolia, Anvil local, etc.) — shows Faucet button. False on Ethereum mainnet (chainId 1).
+export const IS_TESTNET = IS_LIVE && CHAIN_ID !== 1;
+
 // The V4 PoolKey assembled from the artifact, ready to pass to contract calls.
 export const POOL_KEY = DEPLOYMENT
   ? {

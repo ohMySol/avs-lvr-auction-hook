@@ -41,19 +41,7 @@ export const hookAbi = [
     ],
     outputs: [],
   },
-  // ---- Rewards ----
-  {
-    type: "function",
-    name: "claimRewards",
-    stateMutability: "nonpayable",
-    inputs: [
-      poolKeyTuple,
-      { name: "tickLower", type: "int24" },
-      { name: "tickUpper", type: "int24" },
-      { name: "salt", type: "bytes32" },
-    ],
-    outputs: [],
-  },
+  // ---- Rewards (paid automatically on removeLiquidity) ----
   {
     type: "function",
     name: "earned",
@@ -65,10 +53,7 @@ export const hookAbi = [
       { name: "tickUpper", type: "int24" },
       { name: "salt", type: "bytes32" },
     ],
-    outputs: [
-      { name: "amount0", type: "uint256" },
-      { name: "amount1", type: "uint256" },
-    ],
+    outputs: [{ name: "amount", type: "uint256" }],
   },
   {
     type: "function",
@@ -90,8 +75,7 @@ export const hookAbi = [
     inputs: [
       { name: "poolId", type: "bytes32", indexed: true },
       { name: "winner", type: "address", indexed: true },
-      { name: "currencyIndex", type: "uint8", indexed: false },
-      { name: "bidAmount", type: "uint256", indexed: false },
+      { name: "rewardAmount", type: "uint256", indexed: false },
     ],
   },
   {
@@ -111,8 +95,7 @@ export const hookAbi = [
     inputs: [
       { name: "poolId", type: "bytes32", indexed: true },
       { name: "lp", type: "address", indexed: true },
-      { name: "amount0", type: "uint256", indexed: false },
-      { name: "amount1", type: "uint256", indexed: false },
+      { name: "amount", type: "uint256", indexed: false },
     ],
   },
 ];

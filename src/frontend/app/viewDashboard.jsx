@@ -5,8 +5,11 @@
 import { formatUnits } from "viem";
 import { EA } from "./data.js";
 import { Icon, Card, Stat, Pill, Btn, TokenRow, AreaChart } from "./ui.jsx";
-import { IS_LIVE } from "./chain/deployment.js";
-import { useWallet, useEarned, useClaim, useFaucet } from "./chain/hooks.js";
+import { IS_LIVE, IS_TESTNET } from "./chain/deployment.js";
+import { useWallet, useEarned, useFaucet, usePositionAmounts, DEC0 } from "./chain/hooks.js";
+
+const fmtLiq = (l) =>
+  new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 }).format(Number(l));
 
 function ConnectPrompt({ onConnect }) {
   return (
@@ -24,35 +27,38 @@ function ConnectPrompt({ onConnect }) {
   );
 }
 
-function DashboardView({ connected, onConnect, rewards, claiming, onClaim, position, onManage, onToast }) {
+function DashboardView({ connected, onConnect, rewards, position, onManage, onToast }) {
   // Hooks run unconditionally (before the early return) to satisfy the rules of hooks; they no-op
   // until a live deployment + connected account are present.
   const { address } = useWallet();
   const earned = useEarned(address);
-  const { claim, isPending: claimingLive } = useClaim();
   const { faucet, isPending: faucetPending } = useFaucet();
+  const livePos = usePositionAmounts(address);  // null when no live position
 
   if (!connected) return <ConnectPrompt onConnect={onConnect} />;
 
   const live = IS_LIVE && connected;
+  const hasLivePos = live && livePos != null;
+  // When IS_LIVE but no position yet, show zeros — not the mock numbers.
+  const noPos = live && livePos == null;
+
+  // ---- position values ----
   const P = position;
-  // The demo pool is currency0 ~ mUSD / currency1 ~ mETH; live reward amounts come from hook.earned.
-  const usdcRwd = live ? Number(formatUnits(earned.amount0 ?? 0n, earned.dec0)) : rewards.usdc;
-  const ethRwd = live ? Number(formatUnits(earned.amount1 ?? 0n, earned.dec1)) : rewards.eth;
-  const hasRewards = ethRwd > 1e-9 || usdcRwd > 1e-9;
-  const claimingNow = live ? claimingLive : claiming;
-  const doClaim = live
-    ? async () => {
-        try { await claim(); await earned.refetch(); onToast && onToast('Rewards claimed · tx confirmed'); }
-        catch { onToast && onToast('Claim failed'); }
-      }
-    : onClaim;
+  const amount0     = hasLivePos ? livePos.amount0Human : (noPos ? 0 : P.amountUsdc);
+  const amount1     = hasLivePos ? livePos.amount1Human : (noPos ? 0 : P.amountEth);
+  const poolSharePct = hasLivePos ? (livePos.poolShareBps / 100).toFixed(2) : (noPos ? '0.00' : (P.poolShareBps / 100).toFixed(2));
+  const liquidityLabel = hasLivePos ? fmtLiq(livePos.posLiquidity) : (noPos ? '—' : (P.liquidityNum + 'M'));
+  const valueC0 = hasLivePos ? livePos.valueC0 : (noPos ? 0 : (P.amountEth * EA.seed.poolPrice + P.amountUsdc));
+  const inRange = true;  // full-range position is always in range
+
+  // ---- rewards ----
+  const usdcRwd = live ? Number(formatUnits(earned.amount ?? 0n, earned.dec)) : rewards.usdc;
+  const hasRewards = usdcRwd > 1e-9;
+
   const doFaucet = async () => {
     try { await faucet(); onToast && onToast('Test tokens sent to your wallet'); }
     catch { onToast && onToast('Faucet failed'); }
   };
-  const rewardUsd = ethRwd * EA.seed.poolPrice + usdcRwd;
-  const inRange = EA.seed.poolPrice >= P.priceLower && EA.seed.poolPrice <= P.priceUpper;
 
   return (
     <>
@@ -62,22 +68,24 @@ function DashboardView({ connected, onConnect, rewards, claiming, onClaim, posit
           <Card
             title="Your position"
             right={<div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Pill kind={inRange ? 'acc' : 'amb'}>{inRange ? '● in range' : '○ out of range'}</Pill>
+              {noPos
+                ? <Pill kind="amb">○ no position</Pill>
+                : <Pill kind="acc">● in range</Pill>}
               <div style={{ display: 'flex', gap: 6 }}>
-                {live && <button className="mini-btn" onClick={doFaucet} disabled={faucetPending}>{faucetPending ? '…' : 'Faucet'}</button>}
+                {IS_TESTNET && <button className="mini-btn" onClick={doFaucet} disabled={faucetPending}>{faucetPending ? '…' : 'Faucet'}</button>}
                 <button className="mini-btn" onClick={() => onManage('add')}>+ Add</button>
-                <button className="mini-btn" onClick={() => onManage('remove')}>− Remove</button>
+                {!noPos && <button className="mini-btn" onClick={() => onManage('remove')}>− Remove</button>}
               </div>
             </div>}
           >
             <div className="grid cols-3" style={{ gap: 14, marginBottom: 4 }}>
-              <Stat sm label="Range (USDC / ETH)" value={EA.fmtNum(P.priceLower, 0)} sub={'→ ' + EA.fmtNum(P.priceUpper, 0)} />
-              <Stat sm label="Liquidity (L)" value={P.liquidityNum + 'M'} sub={'pool share ' + (P.poolShareBps / 100).toFixed(2) + '%'} />
-              <Stat sm label="Value" value={EA.fmtCompact(P.amountEth * EA.seed.poolPrice + P.amountUsdc)} sub="ETH + USDC" />
+              <Stat sm label="Range" value={hasLivePos ? 'Full' : EA.fmtNum(P.priceLower, 0)} sub={hasLivePos ? 'range' : ('→ ' + EA.fmtNum(P.priceUpper, 0))} />
+              <Stat sm label="Liquidity (L)" value={liquidityLabel} sub={'pool share ' + poolSharePct + '%'} />
+              <Stat sm label="Value" value={EA.fmtCompact(valueC0)} sub="in currency0" />
             </div>
             <div className="divider" />
-            <TokenRow sym="ETH" full="Ether" ico="eth" amt={EA.fmtNum(P.amountEth, 4)} usd={EA.fmtUsd(P.amountEth * EA.seed.poolPrice)} />
-            <TokenRow sym="USDC" full="USD Coin" ico="usdc" amt={EA.fmtNum(P.amountUsdc, 2)} usd={EA.fmtUsd(P.amountUsdc)} />
+            <TokenRow sym="USDC" full="currency0" ico="usdc" amt={EA.fmtNum(amount0, 2)} usd={EA.fmtUsd(amount0)} />
+            <TokenRow sym="ETH" full="currency1" ico="eth" amt={EA.fmtNum(amount1, 4)} usd={EA.fmtUsd(amount1 * (livePos?.poolPrice ? 1 / livePos.poolPrice : EA.seed.poolPrice))} />
           </Card>
 
           <Card title="Rebate accrual" sub="Cumulative LVR rebate to this position · 30d" right={<Pill kind="acc">{EA.fmtCompact(EA.HISTORY[EA.HISTORY.length-1].cum)}</Pill>}>
@@ -89,26 +97,20 @@ function DashboardView({ connected, onConnect, rewards, claiming, onClaim, posit
           </Card>
         </div>
 
-        {/* RIGHT — claim */}
+        {/* RIGHT — rewards */}
         <div className="grid" style={{ alignContent: 'start' }}>
           <Card
-            title="Unclaimed rewards"
+            title="Pending rewards"
             sub="hook.earned(key, you, tickLower, tickUpper, salt)"
             style={{ borderColor: hasRewards ? 'color-mix(in oklab, var(--accent) 32%, var(--line))' : 'var(--line)' }}
           >
             <div className="stat" style={{ marginBottom: 14 }}>
-              <div className="label">Total claimable</div>
-              <div className="value pos" style={{ fontSize: 34 }}>{EA.fmtUsd(rewardUsd)}</div>
+              <div className="label">Accrued (currency0)</div>
+              <div className="value pos" style={{ fontSize: 34 }}>{EA.fmtUsd(usdcRwd)}</div>
             </div>
-            <TokenRow sym="ETH" full="Ether" ico="eth" amt={EA.fmtNum(ethRwd, 5)} usd={EA.fmtUsd(ethRwd * EA.seed.poolPrice)} />
             <TokenRow sym="USDC" full="USD Coin" ico="usdc" amt={EA.fmtNum(usdcRwd, 2)} usd={EA.fmtUsd(usdcRwd)} />
-            <div style={{ marginTop: 18 }}>
-              <Btn block disabled={!hasRewards || claimingNow} onClick={doClaim}>
-                {claimingNow ? 'Confirming…' : hasRewards ? <><Icon name="down" size={16} /> Claim rewards</> : 'Nothing to claim'}
-              </Btn>
-            </div>
-            <div className="hint" style={{ textAlign: 'center', marginTop: 10 }}>
-              {claimingNow ? 'Submitting hook.claimRewards(key, …)' : 'Sent to your wallet · gas ≈ 0.0004 ETH'}
+            <div className="hint" style={{ textAlign: 'center', marginTop: 18 }}>
+              Rewards are paid automatically when you remove liquidity
             </div>
           </Card>
 

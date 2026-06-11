@@ -12,7 +12,7 @@ import { LiquidityModal } from "./liquidityModal.jsx";
 import {
   useTweaks, TweaksPanel, TweakSection, TweakColor, TweakRadio, TweakSelect,
 } from "./tweaks-panel.jsx";
-import { useWallet } from "./chain/hooks.js";
+import { useWallet, useChainInfo } from "./chain/hooks.js";
 import { IS_LIVE } from "./chain/deployment.js";
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -58,11 +58,10 @@ function App() {
   // Real wallet via wagmi when a deployment is wired in; a mock toggle keeps the design demo usable
   // without a chain (IS_LIVE === false).
   const wallet = useWallet();
+  const { blockNumber: liveBlock, chainName } = useChainInfo();
   const [mockConnected, setMockConnected] = useState(false);
   const connected = IS_LIVE ? wallet.isConnected : mockConnected;
   const [toasts, setToasts] = useState([]);
-  const [claiming, setClaiming] = useState(false);
-
   // liquidity position (mutable)
   const [position, setPosition] = useState({
     amountEth: 5.812, amountUsdc: 12480.0,
@@ -150,22 +149,6 @@ function App() {
     pushToast('Wallet disconnected');
   }
 
-  function claim() {
-    setClaiming(true);
-    const claimedUsd = rewards.eth * poolPrice + rewards.usdc;
-    setTimeout(() => {
-      setRewards((r) => ({
-        ...r,
-        lifetimeEth: r.lifetimeEth + r.eth,
-        lifetimeUsdc: r.lifetimeUsdc + r.usdc,
-        claims: r.claims + 1,
-        eth: 0, usdc: 0,
-      }));
-      setClaiming(false);
-      pushToast('Claimed ' + EA.fmtUsd(claimedUsd) + ' · tx confirmed');
-    }, 1500);
-  }
-
   const NAV = [
     ['home', 'Home', 'spark'],
     ['dashboard', 'LP Dashboard', 'layers'],
@@ -204,7 +187,9 @@ function App() {
         <span className="spacer" />
         <span className="blockchip">
           <span className="live" />
-          block #{block.toLocaleString()} · next {countdown}s
+          {IS_LIVE && liveBlock != null
+            ? <>block #{liveBlock.toLocaleString()} · {chainName}</>
+            : <>block #{block.toLocaleString()} · next {countdown}s</>}
         </span>
         {connected ? (
           <button className="wallet connected" onClick={disconnect}>
@@ -226,7 +211,7 @@ function App() {
         </div>
 
         {view === 'dashboard' && (
-          <DashboardView connected={connected} onConnect={connect} rewards={rewards} claiming={claiming} onClaim={claim} position={position} onManage={openManage} onToast={pushToast} />
+          <DashboardView connected={connected} onConnect={connect} rewards={rewards} position={position} onManage={openManage} onToast={pushToast} />
         )}
         {view === 'pool' && (
           <PoolView poolPrice={poolPrice} cexPrice={cexPrice} totalLvr={totalLvr} arbCount={arbCount} events={events} />

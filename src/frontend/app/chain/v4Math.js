@@ -62,6 +62,23 @@ export function getLiquidityForAmounts(sqrtP, sqrtA, sqrtB, amount0, amount1) {
   return liquidityForAmount1(sqrtA, sqrtB, amount1);
 }
 
+// LiquidityAmounts.getAmountsForLiquidity — inverse of getLiquidityForAmounts.
+// Returns the token amounts backing `liquidity` at current sqrtP in range [sqrtA, sqrtB].
+// All sqrt prices are Q64.96 BigInts; liquidity is uint128 BigInt; amounts are raw token units (wei).
+export function getAmountsForLiquidity(sqrtP, sqrtA, sqrtB, liquidity) {
+  if (sqrtA > sqrtB) [sqrtA, sqrtB] = [sqrtB, sqrtA];
+  let amount0 = 0n, amount1 = 0n;
+  if (sqrtP <= sqrtA) {
+    amount0 = (liquidity * Q96 * (sqrtB - sqrtA)) / (sqrtA * sqrtB);
+  } else if (sqrtP < sqrtB) {
+    amount0 = (liquidity * Q96 * (sqrtB - sqrtP)) / (sqrtP * sqrtB);
+    amount1 = (liquidity * (sqrtP - sqrtA)) / Q96;
+  } else {
+    amount1 = (liquidity * (sqrtB - sqrtA)) / Q96;
+  }
+  return { amount0, amount1 };
+}
+
 // Human price of currency0 denominated in currency1 (currency1 per currency0), decimal-adjusted.
 export function priceFromSqrtX96(sqrtPriceX96, decimals0, decimals1) {
   const ratio = Number(sqrtPriceX96) / Number(Q96);
