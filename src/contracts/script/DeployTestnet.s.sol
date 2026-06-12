@@ -91,15 +91,15 @@ contract DeployTestnet is DeployCore {
             );
         }
 
-        FaucetToken a = new FaucetToken("Mock USD", "mUSD", 18, 10_000);
+        FaucetToken a = new FaucetToken("Mock USDC", "mUSDC", 18, 10_000);
         FaucetToken b = new FaucetToken("Mock Ether", "mETH", 18, 10);
-        (FaucetToken lo, FaucetToken hi) = address(a) < address(b) ? (a, b) : (b, a);
+        (FaucetToken lowerToken, FaucetToken higherToken) = address(a) < address(b) ? (a, b) : (b, a);
 
-        lo.mint(deployer, MINT_AMOUNT);
-        lo.mint(operator, MINT_AMOUNT);
-        hi.mint(deployer, MINT_AMOUNT);
-        hi.mint(operator, MINT_AMOUNT);
+        lowerToken.mint(deployer, MINT_AMOUNT);
+        lowerToken.mint(operator, MINT_AMOUNT);
+        higherToken.mint(deployer, MINT_AMOUNT);
+        higherToken.mint(operator, MINT_AMOUNT);
 
-        return (Currency.wrap(address(lo)), Currency.wrap(address(hi)), 18, 18);
+        return (Currency.wrap(address(lowerToken)), Currency.wrap(address(higherToken)), 18, 18);
     }
 }

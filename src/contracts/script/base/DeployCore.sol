@@ -85,8 +85,12 @@ abstract contract DeployCore is Script {
 
     /// @dev Registers `operator` as an EigenLayer operator and into this AVS's operator set — the
     /// membership `commitWinner` checks. Must run inside the operator's broadcast.
+    /// On a mainnet fork the operator may already be registered (mainnet state is preserved); the
+    /// `isOperator` guard skips re-registration so the script doesn't revert with ActivelyDelegated.
     function _registerOperator(NetworkConfig memory config, address avs, address operator) internal {
-        IDelegationManager(config.delegationManager).registerAsOperator(address(0), 0, "");
+        if (!IDelegationManager(config.delegationManager).isOperator(operator)) {
+            IDelegationManager(config.delegationManager).registerAsOperator(address(0), 0, "");
+        }
         uint32[] memory setIds = new uint32[](1);
         setIds[0] = ConstantsLib.OPERATOR_SET_ID;
         
